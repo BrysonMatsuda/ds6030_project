@@ -1,0 +1,474 @@
+---
+title: "Project-1_Group5>"
+author: "Sienna Lee, Chloe Dapaah, Michael Awad, Bryson Matsuda"
+date: "2026-06-08"
+output: html_document
+---
+# Training Data
+## Preprocess the Data
+
+Create binary variable from Class
+
+```{r}
+haiti_train <- read.csv('https://gedeck.github.io/DS-6030/projects/data/HaitiPixels.csv')
+
+haiti_train$BlueTarp <- ifelse(haiti_train$Class == 'Blue Tarp','Blue Tarp', 'Non-Tarp' )
+```
+
+
+```{r}
+# Normalize Color variables
+
+# haiti_train$red_scale <- haiti_train$Red/255 
+# haiti_train$green_scale <- haiti_train$Green/255 
+# haiti_train$blue_scale <- haiti_train$Blue/255
+```
+
+## Exploratory Data Analysis
+
+Blue Tarp vs Non-Blue Tarp count in Data
+
+```{r}
+table(haiti_train$BlueTarp)
+```
+
+Visualization of the number of Blue Tarp vs Non-Blue Tarp
+
+```{r}
+library(ggplot2)
+
+haiti_train |>
+  ggplot(aes(x = BlueTarp, fill = BlueTarp)) +
+  geom_bar() +
+  scale_fill_manual(values = c('Blue Tarp' = 'skyblue', 'Non-Tarp' = 'darkred'))
+  
+```
+
+Boxplots for binary against colors
+
+```{r}
+#| fig.width: 9
+#| fig.height: 8
+#| fig.align: center
+#| out.width: 75%
+library(patchwork)
+
+b1 <- ggplot(haiti_train, aes(x = BlueTarp, y = Red)) +
+  geom_boxplot()
+b2 <- ggplot(haiti_train, aes(x = BlueTarp, y = Green)) +
+  geom_boxplot()
+b3 <- ggplot(haiti_train, aes(x = BlueTarp, y = Blue)) +
+  geom_boxplot()
+b1+b2+b3
+```
+
+Histograms of color variables
+
+```{r}
+#| fig.width: 7
+#| fig.height: 3
+
+g1 <-ggplot(haiti_train, aes(Red)) +
+  geom_histogram(fill='darkred')
+g2 <- ggplot(haiti_train, aes(Green)) +
+  geom_histogram(fill='lightgreen')
+g3 <- ggplot(haiti_train, aes(Blue)) +
+  geom_histogram(fill='skyblue')
+g1+g2+g3
+```
+
+# Holdout Data
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(patchwork)
+```
+
+
+## Hold-Out Data: Unzip the file
+```{r}
+#Create a folder
+unzip("HoldOutData.zip", exdir = "HoldOut")
+
+#Check files
+list.files("HoldOut")
+```
+
+## Parse single ENVI ROI file
+```{r}
+parse_envi_roi <- function(filepath, label) {
+  read_table(
+    filepath,
+    comment    = ";",
+    col_names  = c("ID", "X", "Y", "Map_X", "Map_Y",
+                   "Lat", "Lon", "Red", "Green", "Blue"),
+    col_types  = cols(.default = col_double()),
+    show_col_types = FALSE
+  ) |>
+    select(Red, Green, Blue) |>
+    mutate(
+      BlueTarp = factor(label, levels = c(0, 1),
+                        labels = c("Non-Tarp", "Blue Tarp"))
+    )
+}
+
+
+```
+
+## Load all files and combine into one df
+```{r}
+files <- tribble(
+  ~path,                                      ~label,
+  "orthovnir057_ROI_NON_Blue_Tarps.txt",       0,
+  "orthovnir067_ROI_Blue_Tarps.txt",           1,
+  "orthovnir067_ROI_NOT_Blue_Tarps.txt",       0,
+  "orthovnir069_ROI_Blue_Tarps.txt",           1,
+  "orthovnir069_ROI_NOT_Blue_Tarps.txt",       0,
+  "orthovnir078_ROI_Blue_Tarps.txt",           1,
+  "orthovnir078_ROI_NON_Blue_Tarps.txt",       0
+)
+ 
+holdout <- pmap_dfr(files, ~ parse_envi_roi(..1, ..2))
+cat("Total rows:", scales::comma(nrow(holdout)), "\n\n")
+```
+
+## Data quality checks
+```{r}
+cat("Dimensions \n")
+glimpse(holdout)
+ 
+cat("\n Missing values \n")
+print(colSums(is.na(holdout)))
+ 
+cat("\n Value ranges (should be 0–255) \n")
+holdout |>
+  select(Red, Green, Blue) |>
+  summary() |>
+  print()
+ 
+cat("\n Duplicate rows \n")
+n_dupes <- sum(duplicated(holdout |> select(Red, Green, Blue, BlueTarp)))
+cat("Duplicates:", scales::comma(n_dupes), "\n")
+ 
+cat("\n Class distribution \n")
+class_counts <- holdout |> count(BlueTarp)
+print(class_counts)
+ 
+imbalance_ratio <- class_counts$n[class_counts$BlueTarp == "Non-Tarp"] /
+                   class_counts$n[class_counts$BlueTarp == "Blue Tarp"]
+cat("Imbalance ratio:", round(imbalance_ratio, 0), ":1 (Non-Tarp : Blue Tarp)\n")
+```
+
+## Exploratory Data Analysis
+
+```{r}
+holdout |>
+  ggplot(aes(x = BlueTarp, fill = BlueTarp)) +
+  labs(title = "Tarp Distribution",
+       y = "Pixel Count") +
+  geom_bar() +
+  scale_fill_manual(values = c("Non-Tarp" = "grey", "Blue Tarp" = "blue"))
+```
+
+
+```{r}
+df <- holdout |>
+  pivot_longer(cols = c(Red, Green, Blue),
+               names_to  = "Channel",
+               values_to = "Intensity") |>
+  mutate(Channel = factor(Channel, levels = c("Red", "Green", "Blue")))
+glimpse(df)
+
+ggplot(df, aes(x = BlueTarp, y = Intensity, fill = BlueTarp)) +
+  geom_boxplot() +
+  facet_wrap(~Channel, ncol = 3) +
+  scale_fill_manual(values = c("Non-Tarp" = "grey", "Blue Tarp" = "blue")) +
+  labs(title = "Channel Intensity by Class",
+       y = "Pixel Intensity (0–255)")
+```
+
+
+
+Logistic Regression:
+
+Base Logistic Regression:
+```{r}
+formula <- BlueTarp ~ Red + Green + Blue
+
+# factor BlueTarp for both datasets
+haiti_train <- haiti_train |>
+  mutate(BlueTarp = factor(BlueTarp))
+holdout <- holdout |>
+  mutate(BlueTarp = factor(BlueTarp))
+
+# make positive class for holdout set Blue Tarp to match training set
+holdout$BlueTarp <- factor(holdout$BlueTarp, levels = levels(haiti_train$BlueTarp))
+
+# create logistic regression model, fitting on the training data
+logreg_model <- logistic_reg(mode = "classification", engine = "glm") |>
+  fit(formula, haiti_train)
+```
+
+```{r}
+# plot ROC curves for training and test data
+get_roc_plot <- function(model, data, model_name) {
+  predictions <- model |>
+    augment(data)
+  auc <- roc_auc(predictions, BlueTarp, `.pred_Blue Tarp`, event_level = "first")
+  title <- paste0(model_name, " (AUC=", round(auc$.estimate, 3), ")")
+  roc_data <- predictions |>
+    roc_curve(truth = BlueTarp, `.pred_Blue Tarp`, event_level = "first")
+  g <- autoplot(roc_data) +
+    labs(title = title)
+  return(g)
+}
+
+g1 <- get_roc_plot(logreg_model, holdout, "Logreg test")
+g2 <- get_roc_plot(logreg_model, haiti_train, "Logreg train")
+
+g1+g2
+```
+The ROC-AUC is similar between training and test data, so there is no evidence of overfitting.
+
+```{r}
+#| fig.cap: F-measure as a function of threshold for the three classification models
+#| fig.alt: F-measure as a function of threshold for the three classification models
+#| fig.width: 8
+#| fig.height: 4
+#| out.width: 100%
+
+# determine threshold that maximizes f-measure
+threshold_scan <- function(model, data, model_name) {
+  threshold_data <- model |>
+    augment(data) |>
+    probably::threshold_perf(BlueTarp, `.pred_Blue Tarp`,
+      thresholds = seq(0.05, 0.95, 0.01), event_level = "first",
+      metrics = metric_set(f_meas))
+  opt_threshold <- threshold_data |>
+    arrange(-.estimate) |>
+    first()
+  g <- ggplot(threshold_data, aes(x = .threshold, y = .estimate)) +
+    geom_line() +
+    geom_point(data = opt_threshold, color = "red", size = 2) +
+    labs(title = model_name, x = "Threshold", y = "F-Measure") +
+    coord_cartesian(ylim = c(0.8, 1))
+  return(list(
+    graph = g,
+    threshold = opt_threshold |>
+      pull(.threshold)
+  ))
+}
+
+logreg_threshold <- threshold_scan(logreg_model, haiti_train, "Logistic regression")
+logreg_threshold
+```
+The optimal threshold is 0.21.
+
+```{r}
+custom_metrics <- metric_set(accuracy, precision, sens, spec, f_meas)
+
+predict_at_threshold <- function(model, data, threshold) {
+  return(
+    model |>
+      augment(data) |>
+      mutate(.pred_class = make_two_class_pred(`.pred_Blue Tarp`,
+          c("Blue Tarp", "Non-Tarp"), threshold = threshold),
+          .pred_class = factor(.pred_class, levels=levels(BlueTarp))
+      )
+  )
+}
+
+calculate_metrics_at_threshold <- function(model, train, holdout,
+  model_name, threshold) {
+  df <- bind_rows(
+    bind_cols(
+      model = model_name, dataset = "holdout", threshold = threshold,
+      custom_metrics(predict_at_threshold(model, holdout, threshold),
+        truth = BlueTarp, estimate = .pred_class, event_level = "first"),
+    ),
+  )
+  return(df)
+}
+
+calculate_metrics_at_threshold(logreg_model,haiti_train, holdout, "Logistic regression", logreg_threshold$threshold)|> 
+  arrange(dataset)
+```
+
+
+10-fold Cross-Validation:
+```{r}
+set.seed(6030)
+
+custom_metrics <- metric_set(accuracy, precision, sens, spec, f_meas, roc_auc)
+
+# fit model using 10-fold cross-validation
+logreg_rec <- recipe(formula, data = haiti_train)
+
+logreg_spec <- logistic_reg(mode = "classification", engine = "glm")
+
+logreg_wf <- workflow() |>
+  add_recipe(logreg_rec) |>
+  add_model(logreg_spec)
+
+resamples <- vfold_cv(haiti_train, v = 10, strata = BlueTarp)
+cv_control <- control_resamples(save_pred = TRUE)
+
+logreg_cv <- fit_resamples(logreg_wf, resamples,
+  metrics = custom_metrics,
+  control = cv_control)
+
+# report metrics of the model
+collect_metrics(logreg_cv)
+```
+
+```{r}
+# ROC-AUC curve for 10-fold cross-validation
+collect_predictions(logreg_cv) |>
+  roc_curve(truth = BlueTarp, `.pred_Blue Tarp`, event_level = "first") |>
+  autoplot()
+```
+
+```{r}
+# fit model on full training set and estimate performance metrics on test set
+logreg_fit <- logreg_wf |> 
+  fit(haiti_train)
+
+augment(logreg_fit, new_data = holdout) |>
+  custom_metrics(truth = BlueTarp, estimate = .pred_class, `.pred_Blue Tarp`, event_level = "first")|>
+  mutate(data = "Holdout")
+```
+
+Formatted like LDA and QDA:
+```{r}
+preds_logreg <- predict(logreg_fit, new_data = holdout)
+
+prob_preds_logreg <- predict(logreg_fit, new_data = holdout, type = "prob")
+
+results_logreg <- bind_cols(holdout, preds_logreg, prob_preds_logreg)
+
+cm_logreg <- conf_mat(results_logreg, truth = BlueTarp, estimate = .pred_class)
+
+acc_logreg <- accuracy(
+  results_logreg,
+  truth = BlueTarp,
+  estimate = .pred_class,
+)
+
+prec_logreg <- precision(
+  results_logreg,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  event_level = "first"
+)
+
+recall_logreg <- recall(
+  results_logreg,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  event_level = "first"
+)
+
+f1_logreg <- f_meas(
+  results_logreg,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  event_level = "first"
+)
+
+metrics_df <- tibble(
+  model = character(),
+  accuracy = numeric(),
+  precision = numeric(),
+  recall = numeric(),
+  f1_score = numeric(),
+  conf_matrix = list()
+)
+
+metrics_df <- metrics_df |>
+  add_row(
+    model = "Logistic Regression",
+    accuracy = acc_logreg$.estimate,
+    precision = prec_logreg$.estimate,
+    recall = recall_logreg$.estimate,
+    f1_score = f1_logreg$.estimate,
+    conf_matrix = list(cm_logreg)
+  )
+
+metrics_df
+```
+
+
+Principle Components:
+```{r}
+# tune to find best number of components
+logreg_tune_rec <- recipe(formula, data = haiti_train) |>
+  step_normalize(all_numeric_predictors()) |>
+  step_pca(all_numeric_predictors(), num_comp = tune())
+
+logreg_tune_wf <- workflow() |>
+  add_recipe(logreg_tune_rec) |>
+  add_model(logreg_spec)
+
+tune_results <- tune_grid(logreg_tune_wf,
+  resamples = resamples, grid = grid_regular(num_comp(range = c(1,3)), levels = 3))
+
+# plot tuning results
+pca_plot <- autoplot(tune_results)
+pca_plot
+
+# select best parameters using roc-auc
+best_parameters <- select_best(tune_results, metric = "roc_auc")
+
+show_best(tune_results, n=1)
+
+best_logreg_workflow <- logreg_tune_wf |>
+  finalize_workflow(best_parameters) |>
+  fit(haiti_train)
+
+# compute metrics
+augment(best_logreg_workflow, new_data = holdout) |>
+  custom_metrics(truth = BlueTarp, estimate = .pred_class, `.pred_Blue Tarp`, event_level = "first")|>
+  mutate(data = "Holdout")
+```
+
+```{r}
+# repeat above for PLS
+
+# tune to find best number of components
+logreg_tune_rec <- recipe(formula, data = haiti_train) |>
+  step_normalize(all_numeric_predictors()) |>
+  step_pls(all_numeric_predictors(), outcome = 'BlueTarp', num_comp = tune())
+
+logreg_tune_wf <- workflow() |>
+  add_recipe(logreg_tune_rec) |>
+  add_model(logreg_spec)
+
+tune_results <- tune_grid(logreg_tune_wf,
+  resamples = resamples, grid = grid_regular(num_comp(range = c(1,3)), levels = 3))
+
+# plot tuning results
+pls_plot <- autoplot(tune_results)
+pls_plot
+
+# select best parameters using roc-auc
+best_parameters <- select_best(tune_results, metric = "roc_auc")
+
+show_best(tune_results, n=1)
+
+best_logreg_workflow <- logreg_tune_wf |>
+  finalize_workflow(best_parameters) |>
+  fit(haiti_train)
+
+# compute metrics
+augment(best_logreg_workflow, new_data = holdout) |>
+  custom_metrics(truth = BlueTarp, estimate = .pred_class, `.pred_Blue Tarp`, event_level = "first")|>
+  mutate(data = "Holdout")
+```
+
+Results from PCA and PLS are the same as 10-fold cross-validation
+
+```{r}
+pca_plot + pls_plot
+```
+Using both PCA and PLS maintained all 3 components, so the metrics are identical to the 10-fold cross-validation.
+
