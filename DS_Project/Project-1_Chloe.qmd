@@ -1,0 +1,310 @@
+---
+title: "Project-1_Group5>"
+author: "Sienna Lee, Chloe Dapaah, Michael Awad, Bryson Matsuda"
+date: "2026-06-08"
+output: html_document
+---
+
+```{r}
+library(future)
+plan(multisession, workers = parallel::detectCores(logical = FALSE))
+```
+
+# Training Data
+## Preprocess the Data
+
+Create binary variable from Class
+
+```{r}
+haiti_train <- read.csv('https://gedeck.github.io/DS-6030/projects/data/HaitiPixels.csv')
+
+haiti_train$BlueTarp <- factor(ifelse(haiti_train$Class == 'Blue Tarp','Blue Tarp', 'Non-Tarp'),
+  levels = c("Non-Tarp", "Blue Tarp"))
+```
+
+
+```{r}
+# Normalize Color variables
+
+# haiti_train$red_scale <- haiti_train$Red/255 
+# haiti_train$green_scale <- haiti_train$Green/255 
+# haiti_train$blue_scale <- haiti_train$Blue/255
+```
+
+## Exploratory Data Analysis
+
+Blue Tarp vs Non-Blue Tarp count in Data
+
+```{r}
+table(haiti_train$BlueTarp)
+```
+
+Visualization of the number of Blue Tarp vs Non-Blue Tarp
+
+```{r}
+library(ggplot2)
+
+haiti_train |>
+  ggplot(aes(x = BlueTarp, fill = BlueTarp)) +
+  geom_bar() +
+  scale_fill_manual(values = c('Blue Tarp' = 'skyblue', 'Non-Tarp' = 'darkred'))
+  
+```
+
+Boxplots for binary against colors
+
+```{r}
+#| fig.width: 9
+#| fig.height: 8
+#| fig.align: center
+#| out.width: 75%
+library(patchwork)
+
+b1 <- ggplot(haiti_train, aes(x = BlueTarp, y = Red)) +
+  geom_boxplot()
+b2 <- ggplot(haiti_train, aes(x = BlueTarp, y = Green)) +
+  geom_boxplot()
+b3 <- ggplot(haiti_train, aes(x = BlueTarp, y = Blue)) +
+  geom_boxplot()
+b1+b2+b3
+```
+
+Histograms of color variables
+
+```{r}
+#| fig.width: 7
+#| fig.height: 3
+
+g1 <-ggplot(haiti_train, aes(Red)) +
+  geom_histogram(fill='darkred')
+g2 <- ggplot(haiti_train, aes(Green)) +
+  geom_histogram(fill='lightgreen')
+g3 <- ggplot(haiti_train, aes(Blue)) +
+  geom_histogram(fill='skyblue')
+g1+g2+g3
+```
+
+# Holdout Data
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(patchwork)
+```
+
+
+## Hold-Out Data: Unzip the file
+```{r}
+#Create a folder
+unzip("HoldOutData.zip", exdir = "HoldOut")
+
+#Check files
+list.files("HoldOut")
+```
+
+## Parse single ENVI ROI file
+```{r}
+parse_envi_roi <- function(filepath, label) {
+  read_table(
+    filepath,
+    comment    = ";",
+    col_names  = c("ID", "X", "Y", "Map_X", "Map_Y",
+                   "Lat", "Lon", "Red", "Green", "Blue"),
+    col_types  = cols(.default = col_double()),
+    show_col_types = FALSE
+  ) |>
+    select(Red, Green, Blue) |>
+    mutate(
+      BlueTarp = factor(label, levels = c(0, 1),
+                        labels = c("Non-Tarp", "Blue Tarp"))
+    )
+}
+
+
+```
+
+## Load all files and combine into one df
+```{r}
+files <- tribble(
+  ~path,                                      ~label,
+  "orthovnir057_ROI_NON_Blue_Tarps.txt",       0,
+  "orthovnir067_ROI_Blue_Tarps.txt",           1,
+  "orthovnir067_ROI_NOT_Blue_Tarps.txt",       0,
+  "orthovnir069_ROI_Blue_Tarps.txt",           1,
+  "orthovnir069_ROI_NOT_Blue_Tarps.txt",       0,
+  "orthovnir078_ROI_Blue_Tarps.txt",           1,
+  "orthovnir078_ROI_NON_Blue_Tarps.txt",       0
+)
+ 
+holdout <- pmap_dfr(files, ~ parse_envi_roi(..1, ..2))
+cat("Total rows:", scales::comma(nrow(holdout)), "\n\n")
+```
+
+## Data quality checks
+```{r}
+cat("Dimensions \n")
+glimpse(holdout)
+ 
+cat("\n Missing values \n")
+print(colSums(is.na(holdout)))
+ 
+cat("\n Value ranges (should be 0–255) \n")
+holdout |>
+  select(Red, Green, Blue) |>
+  summary() |>
+  print()
+ 
+cat("\n Duplicate rows \n")
+n_dupes <- sum(duplicated(holdout |> select(Red, Green, Blue, BlueTarp)))
+cat("Duplicates:", scales::comma(n_dupes), "\n")
+ 
+cat("\n Class distribution \n")
+class_counts <- holdout |> count(BlueTarp)
+print(class_counts)
+ 
+imbalance_ratio <- class_counts$n[class_counts$BlueTarp == "Non-Tarp"] /
+                   class_counts$n[class_counts$BlueTarp == "Blue Tarp"]
+cat("Imbalance ratio:", round(imbalance_ratio, 0), ":1 (Non-Tarp : Blue Tarp)\n")
+```
+
+## Exploratory Data Analysis
+
+```{r}
+holdout |>
+  ggplot(aes(x = BlueTarp, fill = BlueTarp)) +
+  labs(title = "Tarp Distribution",
+       y = "Pixel Count") +
+  geom_bar() +
+  scale_fill_manual(values = c("Non-Tarp" = "grey", "Blue Tarp" = "blue"))
+```
+
+
+```{r}
+haiti_holdout <- holdout |>
+  pivot_longer(cols = c(Red, Green, Blue),
+               names_to  = "Channel",
+               values_to = "Intensity") |>
+  mutate(Channel = factor(Channel, levels = c("Red", "Green", "Blue")))
+glimpse(haiti_holdout)
+
+ggplot(haiti_holdout, aes(x = BlueTarp, y = Intensity, fill = BlueTarp)) +
+  geom_boxplot() +
+  facet_wrap(~Channel, ncol = 3) +
+  scale_fill_manual(values = c("Non-Tarp" = "grey", "Blue Tarp" = "blue")) +
+  labs(title = "Channel Intensity by Class",
+       y = "Pixel Intensity (0–255)")
+```
+
+# Random Forest Model
+## create split for tuning
+```{r}
+set.seed(1)
+
+split <- initial_split(haiti_train, prop = 0.8, strata = BlueTarp)
+train_data <- training(split)
+test_data <- testing(split)
+```
+
+## creating recipe, cross-validation, and defining model
+```{r}
+rf_recipe <- recipe(BlueTarp ~ Red + Green + Blue,
+  data = train_data)
+
+folds <- vfold_cv(train_data, v = 10, strata = BlueTarp)
+
+rf_spec <- rand_forest(mode = "classification", trees = 1000, min_n = tune(), 
+  mtry = tune()) |>
+    set_engine("ranger", importance = "impurity")
+```
+
+## creating workflow
+```{r}
+rf_wf <- workflow() |>
+  add_recipe(rf_recipe) |>
+  add_model(rf_spec)
+```
+
+## tuning
+```{r}
+rf_grid <- grid_regular(mtry(range = c(1,3)),
+  min_n(range = c(2, 30)),
+  levels = 5)
+
+my_metrics <- metric_set(accuracy, precision, roc_auc, recall, f_meas, spec)
+tuned_rf <- tune_grid(rf_wf, resamples = folds,
+  grid = rf_grid, metrics = my_metrics)
+```
+
+```{r}
+autoplot(tuned_rf)
+```
+
+Performance is pretty stable for each metric across min_n
+
+## selecting best model and fitting final model
+```{r}
+best_rf <- select_best(tuned_rf, metric = "f_meas")
+final_rf <- finalize_workflow(rf_wf, best_rf)
+
+rf_fit <- fit(final_rf, data = train_data)
+```
+
+## evaluate on test
+```{r}
+rf_pred <- predict(rf_fit, new_data = test_data, type = "prob") |>
+  bind_cols(predict(rf_fit, new_data = test_data), test_data)
+
+my_metrics(
+  rf_pred,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  `.pred_Blue Tarp`,
+  event_level = "second"
+)
+```
+
+## confusion matrix
+```{r}
+rf_pred |>
+  conf_mat(
+    truth = BlueTarp,
+    estimate = .pred_class
+  )
+```
+
+## final holdout evaluation
+```{r}
+haiti_holdout_wide <-
+  haiti_holdout |>
+  mutate(pixel = rep(1:(n()/3), each = 3)) |>
+  pivot_wider(
+    id_cols = c(pixel, BlueTarp),
+    names_from = Channel,
+    values_from = Intensity
+  ) |>
+  select(-pixel)
+```
+```{r}
+final_rf_fit <- fit(final_rf, data = haiti_train)
+
+holdout_pred <- predict(final_rf_fit, new_data = haiti_holdout_wide, type = "prob") |>
+  bind_cols(predict(final_rf_fit, new_data = haiti_holdout_wide), haiti_holdout_wide)
+```
+
+
+```{r}
+my_metrics(
+  holdout_pred,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  `.pred_Blue Tarp`,
+  event_level = "second"
+)
+```
+
+```{r}
+holdout_pred |>
+  conf_mat(
+    truth = BlueTarp,
+    estimate = .pred_class
+  )
+```
