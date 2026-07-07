@@ -376,6 +376,7 @@ metrics_df <- tibble(
   precision = numeric(),
   recall = numeric(),
   f1_score = numeric(),
+  roc_auc = numeric(),
   conf_matrix = list()
 )
 
@@ -386,6 +387,7 @@ metrics_df <- metrics_df |>
     precision = prec_logreg$.estimate,
     recall = recall_logreg$.estimate,
     f1_score = f1_logreg$.estimate,
+    roc_auc = roc_auc_logreg$.estimate,
     conf_matrix = list(cm_logreg)
   )
 
@@ -491,8 +493,6 @@ cv_results_lda <- fit_resamples(
 lda_fit <- fit(lda_wf, data = train)
 
 lda_engine <- extract_fit_engine(lda_fit)
-
-lda_engine$scaling
 ```
 
 
@@ -532,6 +532,13 @@ f1_lda <- f_meas(
   event_level = "first"
 )
 
+roc_auc_lda <- roc_auc(
+  results_lda,
+  truth = BlueTarp,
+  `.pred_Blue Tarp`,
+  event_level = "first"
+)
+
 metrics_df <- metrics_df |>
   add_row(
     model = "LDA",
@@ -539,6 +546,7 @@ metrics_df <- metrics_df |>
     precision = prec_lda$.estimate,
     recall = recall_lda$.estimate,
     f1_score = f1_lda$.estimate,
+    roc_auc = roc_auc_lda$.estimate,
     conf_matrix = list(cm_lda)
   )
 
@@ -566,8 +574,6 @@ cv_results_qda <- fit_resamples(
 qda_fit <- fit(qda_wf, data = train)
 
 qda_engine <- extract_fit_engine(qda_fit)
-
-qda_engine$scaling
 ```
 
 ```{r}
@@ -606,6 +612,14 @@ f1_qda <- f_meas(
   event_level = "first"
 )
 
+roc_auc_qda <- roc_auc(
+  results_qda,
+  truth = BlueTarp,
+  `.pred_Blue Tarp`,
+  event_level = "first"
+)
+
+
 metrics_df <- metrics_df |>
   add_row(
     model = "QDA",
@@ -613,6 +627,7 @@ metrics_df <- metrics_df |>
     precision = prec_qda$.estimate,
     recall = recall_qda$.estimate,
     f1_score = f1_qda$.estimate,
+    roc_auc = roc_auc_qda$.estimate,
     conf_matrix = list(cm_qda)
   )
 
