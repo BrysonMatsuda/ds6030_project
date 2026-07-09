@@ -1,7 +1,7 @@
 ---
 title: "Project-1_Group5>"
 author: "Sienna Lee, Chloe Dapaah, Michael Awad, Bryson Matsuda"
-date: "2026-06-08"
+date: "2026-07-08"
 output: html_document
 ---
 # Training Data
@@ -637,112 +637,129 @@ metrics_df
 
 KNN:
 ```{r}
+#install.packages("kknn")
 library(kknn)
 
-cv_metrics <- metric_set(accuracy, roc_auc, sens, yardstick::spec, precision, recall, f_meas)
+set.seed(100)
+
+# make factor levels consistent
+haiti_train <- haiti_train |>
+  mutate(
+    BlueTarp = factor(BlueTarp, levels = c("Non-Tarp", "Blue Tarp"))
+  )
+
+knn_rec <- recipe(BlueTarp ~ Red + Green + Blue, data = haiti_train) |>
+  step_normalize(all_numeric_predictors())
+
+# Cross-validation
+folds <- vfold_cv(haiti_train, v = 10, strata = BlueTarp)
 
 # Create KNN model
-tune_nn_spec <- nearest_neighbor(
+knn_spec <- nearest_neighbor(
   engine = "kknn",
   mode = "classification",
   neighbors = tune()
 )
 
-
-# Create workflow
-tune_nn_wf <- workflow() |>
-  add_recipe(rec) |>
-  add_model(tune_nn_spec)
+# Workflow
+knn_wf <- workflow() |>
+  add_recipe(knn_rec) |>
+  add_model(knn_spec)
 
 # Tuning range
-tune_nn_params <- extract_parameter_set_dials(tune_nn_wf) |>
-  update(neighbors = neighbors(c(2,40)))
+knn_grid <- tibble(neighbors = 2:40)
 
-# Control
-cv_control <- control_grid(save_pred = TRUE)
-
-# Tune using cross-validation
-tune_results_nn <- tune_grid(
-  tune_nn_wf,
-  resamples = resamples,
-  control = cv_control,
-  metrics = cv_metrics,
-  grid = grid_regular(tune_nn_params, levels = 39)
+# Metrics
+knn_metrics <- metric_set(
+  accuracy,
+  precision,
+  recall,
+  f_meas,
+  roc_auc,
+  spec
 )
 
-# Choose best K
-show_best(tune_results_nn, metric = "roc_auc", n = 5)
+# Tune K 
+knn_results <- tune_grid(
+  knn_wf,
+  resamples = folds,
+  grid = knn_grid,
+  metrics = knn_metrics,
+  control = control_grid(save_pred = TRUE)
+)
 
-best_nn <- select_best(tune_results_nn, metric = "roc_auc")
-```
-
-```{r, fig.width=9, fig.height=11}
 # Plot tuning results
-
-autoplot(tune_results_nn) +
+autoplot(knn_results) +
   theme_bw() +
   theme(
     text = element_text(size = 13)
   )
+
+# Choose best K
+show_best(knn_results, metric = "accuracy", n = 5)
+show_best(knn_results, metric = "precision", n = 5)
+show_best(knn_results, metric = "recall", n = 5)
+show_best(knn_results, metric = "f_meas", n = 5)
+show_best(knn_results, metric = "roc_auc", n = 5)
+
+best_knn <- select_best(knn_results, metric = "roc_auc")
+best_knn
 ```
 
-Result interpretation: The number of neighbors (K) is a tunable hyperparameter in KNN. We evaluated values of K from 2 to 40 using 10-fold cross-validation. This tuning range allowed us to identify the value of K that maximized model performance while avoiding both overfitting (very small K) and underfitting (very large K). The optimal value selected was K=25. The 'best_nn' confirmed that the final model used 25 neighbors. 
+```{r}
+# selecting best nodel and fitting final model
+final_knn_wf <- finalize_workflow(knn_wf, best_knn)
 
-The KNN results indicate that the RGB (Red, Green, and Blue) pixel intensity values are highly informative for distinguishing Blue Tarp from Non-Tarp pixels. Using 10-fold cross-validation, the model achieved an average ROC AUC of approximately 0.995, indicating excellent discriminative ability. In other words, the model is able to almost perfectly distinguish Blue Tarp pixels from Non-Tarp pixels. The overall accuracy was also very high at approximately 99.7%. However, because the dataset is highly imbalanced, accuracy alone is not an adequate measure of performance. Therefore, we also examined sensitivity (recall), specificity, precision, F1 score, and ROC AUC.
+# Fit final KNN model
+final_knn <- fit(final_knn_wf, data = haiti_train)
+```
 
-The tuning plots show that as K increases, the predictions become smoother and the model becomes less sensitive, resulting in a slight decrease in recall. We also observed that ROC AUC continued to increase slightly while the F1 score decreased. This behavior is expected because these metrics evaluate different aspects of model performance. ROC AUC measures how well the model ranks observations across all possible classification thresholds, whereas the F1 score evaluates the balance between precision and recall at a single decision threshold. Consequently, the two metrics do not necessarily reach their maximum values at the same value of K. Overall, the KNN model demonstrated outstanding predictive performance and showed that RGB color information alone is highly effective for identifying blue tarp pixels in this dataset.
 
 ```{r}
-best_knn_fit <- tune_nn_wf |>
-  finalize_workflow(best_nn) |>
-  fit(train)
+exists("final_knn")
+```
 
-preds_knn <- predict(best_knn_fit, new_data = holdout)
+```{r}
+class(final_knn)
+```
 
-prob_preds_knn <- predict(best_knn_fit, new_data = holdout, type = "prob")
 
-results_knn <- bind_cols(holdout, preds_knn, prob_preds_knn)
-
-cm_knn <- conf_mat(results_knn, truth = BlueTarp, estimate = .pred_class)
-
-acc_knn <- accuracy(
-  results_knn,
-  truth = BlueTarp,
-  estimate = .pred_class,
-)
-
-prec_knn <- precision(
-  results_knn,
-  truth = BlueTarp,
-  estimate = .pred_class,
-  event_level = "first"
-)
-
-recall_knn <- recall(
-  results_knn,
-  truth = BlueTarp,
-  estimate = .pred_class,
-  event_level = "first"
-)
-
-f1_knn <- f_meas(
-  results_knn,
-  truth = BlueTarp,
-  estimate = .pred_class,
-  event_level = "first"
-)
-
-metrics_df <- metrics_df |>
-  add_row(
-    model = "KNN",
-    accuracy = acc_knn$.estimate,
-    precision = prec_knn$.estimate,
-    recall = recall_knn$.estimate,
-    f1_score = f1_knn$.estimate,
-    conf_matrix = list(cm_knn)
+```{r}
+# Make holdout outcome factor levels match training data
+haiti_holdout <- haiti_holdout |>
+  mutate(
+    BlueTarp = factor(BlueTarp, levels = levels(haiti_train$BlueTarp))
   )
 
-metrics_df
+# Predict on holdout data
+knn_holdout_pred <- predict(final_knn, new_data = haiti_holdout, type = "class") |>
+  bind_cols(predict(final_knn, new_data = haiti_holdout, type = "prob")) |>
+  bind_cols(haiti_holdout |> select(BlueTarp)) |>
+  mutate(
+    .pred_class = factor(.pred_class, levels = levels(BlueTarp))
+  )
+
+names(knn_holdout_pred)
+
+# Accuracy, precision, recall, F1, specificity
+knn_holdout_pred |>
+  metric_set(accuracy, precision, recall, f_meas, spec)(
+    truth = BlueTarp,
+    estimate = .pred_class,
+    event_level = "second"
+  )
+
+# ROC AUC
+knn_holdout_pred |>
+  roc_auc(
+    truth = BlueTarp,
+    '.pred_Blue Tarp',
+    event_level = "second"
+  )
+
+# Evaluate holdout performance
+names(knn_holdout_pred)
+  
 ```
 
 
