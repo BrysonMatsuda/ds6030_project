@@ -182,8 +182,6 @@ ggplot(df, aes(x = BlueTarp, y = Intensity, fill = BlueTarp)) +
 
 
 Logistic Regression:
-
-Base Logistic Regression:
 ```{r}
 formula <- BlueTarp ~ Red + Green + Blue
 
@@ -199,93 +197,6 @@ holdout$BlueTarp <- factor(holdout$BlueTarp, levels = levels(train$BlueTarp))
 # create logistic regression model, fitting on the training data
 logreg_model <- logistic_reg(mode = "classification", engine = "glm") |>
   fit(formula, train)
-```
-
-```{r}
-# plot ROC curves for training and test data
-get_roc_plot <- function(model, data, model_name) {
-  predictions <- model |>
-    augment(data)
-  auc <- roc_auc(predictions, BlueTarp, `.pred_Blue Tarp`, event_level = "first")
-  title <- paste0(model_name, " (AUC=", round(auc$.estimate, 3), ")")
-  roc_data <- predictions |>
-    roc_curve(truth = BlueTarp, `.pred_Blue Tarp`, event_level = "first")
-  g <- autoplot(roc_data) +
-    labs(title = title)
-  return(g)
-}
-
-g1 <- get_roc_plot(logreg_model, holdout, "Logreg test")
-g2 <- get_roc_plot(logreg_model, train, "Logreg train")
-
-g1+g2
-```
-The ROC-AUC is similar between training and test data, so there is no evidence of overfitting.
-
-```{r}
-#| fig.cap: F-measure as a function of threshold for the three classification models
-#| fig.alt: F-measure as a function of threshold for the three classification models
-#| fig.width: 8
-#| fig.height: 4
-#| out.width: 100%
-
-# determine threshold that maximizes f-measure
-threshold_scan <- function(model, data, model_name) {
-  threshold_data <- model |>
-    augment(data) |>
-    probably::threshold_perf(BlueTarp, `.pred_Blue Tarp`,
-      thresholds = seq(0.05, 0.95, 0.01), event_level = "first",
-      metrics = metric_set(f_meas))
-  opt_threshold <- threshold_data |>
-    arrange(-.estimate) |>
-    first()
-  g <- ggplot(threshold_data, aes(x = .threshold, y = .estimate)) +
-    geom_line() +
-    geom_point(data = opt_threshold, color = "red", size = 2) +
-    labs(title = model_name, x = "Threshold", y = "F-Measure") +
-    coord_cartesian(ylim = c(0.8, 1))
-  return(list(
-    graph = g,
-    threshold = opt_threshold |>
-      pull(.threshold)
-  ))
-}
-
-logreg_threshold <- threshold_scan(logreg_model, train, "Logistic regression")
-logreg_threshold
-```
-The optimal threshold is 0.21.
-
-```{r}
-library(probably)
-
-custom_metrics <- metric_set(accuracy, precision, sens, spec, f_meas)
-
-predict_at_threshold <- function(model, data, threshold) {
-  return(
-    model |>
-      augment(data) |>
-      mutate(.pred_class = make_two_class_pred(`.pred_Blue Tarp`,
-          c("Blue Tarp", "Non-Tarp"), threshold = threshold),
-          .pred_class = factor(.pred_class, levels=levels(BlueTarp))
-      )
-  )
-}
-
-calculate_metrics_at_threshold <- function(model, train, holdout,
-  model_name, threshold) {
-  df <- bind_rows(
-    bind_cols(
-      model = model_name, dataset = "holdout", threshold = threshold,
-      custom_metrics(predict_at_threshold(model, holdout, threshold),
-        truth = BlueTarp, estimate = .pred_class, event_level = "first"),
-    ),
-  )
-  return(df)
-}
-
-calculate_metrics_at_threshold(logreg_model,train, holdout, "Logistic regression", logreg_threshold$threshold)|> 
-  arrange(dataset)
 ```
 
 
@@ -332,68 +243,6 @@ augment(logreg_fit, new_data = holdout) |>
   custom_metrics(truth = BlueTarp, estimate = .pred_class, `.pred_Blue Tarp`, event_level = "first")|>
   mutate(data = "Holdout")
 ```
-
-Formatted like LDA and QDA:
-```{r}
-preds_logreg <- predict(logreg_fit, new_data = holdout)
-
-prob_preds_logreg <- predict(logreg_fit, new_data = holdout, type = "prob")
-
-results_logreg <- bind_cols(holdout, preds_logreg, prob_preds_logreg)
-
-cm_logreg <- conf_mat(results_logreg, truth = BlueTarp, estimate = .pred_class)
-
-acc_logreg <- accuracy(
-  results_logreg,
-  truth = BlueTarp,
-  estimate = .pred_class,
-)
-
-prec_logreg <- precision(
-  results_logreg,
-  truth = BlueTarp,
-  estimate = .pred_class,
-  event_level = "first"
-)
-
-recall_logreg <- recall(
-  results_logreg,
-  truth = BlueTarp,
-  estimate = .pred_class,
-  event_level = "first"
-)
-
-f1_logreg <- f_meas(
-  results_logreg,
-  truth = BlueTarp,
-  estimate = .pred_class,
-  event_level = "first"
-)
-
-metrics_df <- tibble(
-  model = character(),
-  accuracy = numeric(),
-  precision = numeric(),
-  recall = numeric(),
-  f1_score = numeric(),
-  roc_auc = numeric(),
-  conf_matrix = list()
-)
-
-metrics_df <- metrics_df |>
-  add_row(
-    model = "Logistic Regression",
-    accuracy = acc_logreg$.estimate,
-    precision = prec_logreg$.estimate,
-    recall = recall_logreg$.estimate,
-    f1_score = f1_logreg$.estimate,
-    roc_auc = roc_auc_logreg$.estimate,
-    conf_matrix = list(cm_logreg)
-  )
-
-metrics_df
-```
-
 
 Principle Components:
 ```{r}
@@ -462,13 +311,41 @@ augment(best_logreg_workflow, new_data = holdout) |>
   mutate(data = "Holdout")
 ```
 
-Results from PCA and PLS are the same as 10-fold cross-validation
-
 ```{r}
 pca_plot + pls_plot
 ```
-Using both PCA and PLS maintained all 3 components, so the metrics are identical to the 10-fold cross-validation.
 
+L1/L2 Regularization:
+```{r}
+logreg_reg_spec <- logistic_reg(engine = "glmnet", mode = "classification",
+  penalty = tune(), mixture = tune())
+
+linreg_reg_wf <- workflow() |>
+  add_recipe(rec) |>
+  add_model(logreg_reg_spec)
+
+parameters <- extract_parameter_set_dials(linreg_reg_wf)
+
+model_bayes <- tune_bayes(linreg_reg_wf, resamples = resamples,
+  param_info = parameters, iter = 25)
+
+autoplot(model_bayes)
+```
+
+```{r}
+show_best(model_bayes, metric = "roc_auc", n=1)
+
+logreg_best_parameters <- select_best(model_bayes, metric = "roc_auc") |>
+  select(-.config)
+
+logreg_best_workflow <- linreg_reg_wf |>
+  finalize_workflow(logreg_best_parameters) |>
+  fit(train)
+
+augment(logreg_best_workflow, new_data = holdout) |>
+  custom_metrics(truth = BlueTarp, estimate = .pred_class, `.pred_Blue Tarp`, event_level = "first")|>
+  mutate(data = "Holdout")
+```
 
 
 LDA:
