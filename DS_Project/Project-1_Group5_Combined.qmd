@@ -111,13 +111,13 @@ parse_envi_roi <- function(filepath, label) {
 ```{r}
 files <- tribble(
   ~path,                                      ~label,
-  "orthovnir057_ROI_NON_Blue_Tarps.txt",       0,
-  "orthovnir067_ROI_Blue_Tarps.txt",           1,
-  "orthovnir067_ROI_NOT_Blue_Tarps.txt",       0,
-  "orthovnir069_ROI_Blue_Tarps.txt",           1,
-  "orthovnir069_ROI_NOT_Blue_Tarps.txt",       0,
-  "orthovnir078_ROI_Blue_Tarps.txt",           1,
-  "orthovnir078_ROI_NON_Blue_Tarps.txt",       0
+  "HoldOut/orthovnir057_ROI_NON_Blue_Tarps.txt",       0,
+  "HoldOut/orthovnir067_ROI_Blue_Tarps.txt",           1,
+  "HoldOut/orthovnir067_ROI_NOT_Blue_Tarps.txt",       0,
+  "HoldOut/orthovnir069_ROI_Blue_Tarps.txt",           1,
+  "HoldOut/orthovnir069_ROI_NOT_Blue_Tarps.txt",       0,
+  "HoldOut/orthovnir078_ROI_Blue_Tarps.txt",           1,
+  "HoldOut/orthovnir078_ROI_NON_Blue_Tarps.txt",       0
 )
  
 holdout <- pmap_dfr(files, ~ parse_envi_roi(..1, ..2))
@@ -520,16 +520,16 @@ library(kknn)
 set.seed(100)
 
 # make factor levels consistent
-haiti_train <- haiti_train |>
+train <- train |>
   mutate(
     BlueTarp = factor(BlueTarp, levels = c("Non-Tarp", "Blue Tarp"))
   )
 
-knn_rec <- recipe(BlueTarp ~ Red + Green + Blue, data = haiti_train) |>
+knn_rec <- recipe(BlueTarp ~ Red + Green + Blue, data = train) |>
   step_normalize(all_numeric_predictors())
 
 # Cross-validation
-folds <- vfold_cv(haiti_train, v = 10, strata = BlueTarp)
+folds <- vfold_cv(train, v = 10, strata = BlueTarp)
 
 # Create KNN model
 knn_spec <- nearest_neighbor(
@@ -588,7 +588,7 @@ best_knn
 final_knn_wf <- finalize_workflow(knn_wf, best_knn)
 
 # Fit final KNN model
-final_knn <- fit(final_knn_wf, data = haiti_train)
+final_knn <- fit(final_knn_wf, data = train)
 ```
 
 
@@ -605,7 +605,7 @@ class(final_knn)
 # Make holdout outcome factor levels match training data
 haiti_holdout <- haiti_holdout |>
   mutate(
-    BlueTarp = factor(BlueTarp, levels = levels(haiti_train$BlueTarp))
+    BlueTarp = factor(BlueTarp, levels = levels(train$BlueTarp))
   )
 
 # Predict on holdout data
