@@ -613,15 +613,15 @@ class(final_knn)
 
 ```{r}
 # Make holdout outcome factor levels match training data
-haiti_holdout <- haiti_holdout |>
+holdout <- holdout |>
   mutate(
     BlueTarp = factor(BlueTarp, levels = levels(train$BlueTarp))
   )
 
 # Predict on holdout data
-knn_holdout_pred <- predict(final_knn, new_data = haiti_holdout, type = "class") |>
-  bind_cols(predict(final_knn, new_data = haiti_holdout, type = "prob")) |>
-  bind_cols(haiti_holdout |> select(BlueTarp)) |>
+knn_holdout_pred <- predict(final_knn, new_data = holdout, type = "class") |>
+  bind_cols(predict(final_knn, new_data = holdout, type = "prob")) |>
+  bind_cols(holdout |> select(BlueTarp)) |>
   mutate(
     .pred_class = factor(.pred_class, levels = levels(BlueTarp))
   )

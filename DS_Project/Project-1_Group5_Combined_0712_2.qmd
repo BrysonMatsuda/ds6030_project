@@ -550,7 +550,15 @@ metrics_df <- metrics_df |>
 metrics_df
 ```
 
-
+```{r}
+autoplot(cm_lda, type = "heatmap") +
+  labs(
+    title = "LDA Confusion Matrix",
+    x = "Predicted Class",
+    y = "Actual Class"
+  ) +
+  theme_minimal(base_size = 14)
+```
 
 QDA: 
 ```{r}
@@ -631,11 +639,22 @@ metrics_df <- metrics_df |>
 metrics_df
 ```
 
+```{r}
+autoplot(cm_qda, type = "heatmap") +
+  labs(
+    title = "QDA Confusion Matrix",
+    x = "Predicted Class",
+    y = "Actual Class"
+  ) +
+  theme_minimal(base_size = 14)
+```
 
 KNN:
 ```{r}
 #install.packages("kknn")
 library(kknn)
+library(parallel)
+library(doParallel)
 ```
 
 ```{r}
@@ -733,15 +752,15 @@ class(final_knn)
 
 ```{r}
 # Make holdout outcome factor levels match training data
-haiti_holdout <- haiti_holdout |>
+holdout <- holdout |>
   mutate(
     BlueTarp = factor(BlueTarp, levels = levels(train$BlueTarp))
   )
 
 # Predict on holdout data
-knn_holdout_pred <- predict(final_knn, new_data = haiti_holdout, type = "class") |>
-  bind_cols(predict(final_knn, new_data = haiti_holdout, type = "prob")) |>
-  bind_cols(haiti_holdout |> select(BlueTarp)) |>
+knn_holdout_pred <- predict(final_knn, new_data = holdout, type = "class") |>
+  bind_cols(predict(final_knn, new_data = holdout, type = "prob")) |>
+  bind_cols(holdout |> select(BlueTarp)) |>
   mutate(
     .pred_class = factor(.pred_class, levels = levels(BlueTarp))
   )
