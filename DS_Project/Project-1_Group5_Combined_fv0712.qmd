@@ -1,0 +1,863 @@
+---
+title: "Project-1_Group5>"
+author: "Sienna Lee, Chloe Dapaah, Michael Awad, Bryson Matsuda"
+date: "2026-07-12"
+output: html_document
+---
+# Training Data
+## Preprocess the Data
+
+Create binary variable from Class
+
+```{r}
+train <- read.csv('https://gedeck.github.io/DS-6030/projects/data/HaitiPixels.csv')
+
+train$BlueTarp <- ifelse(train$Class == 'Blue Tarp','Blue Tarp', 'Non-Tarp' )
+```
+
+
+## Exploratory Data Analysis
+
+Blue Tarp vs Non-Blue Tarp count in Data
+
+```{r}
+table(train$BlueTarp)
+```
+
+Visualization of the number of Blue Tarp vs Non-Blue Tarp
+
+```{r}
+library(ggplot2)
+
+train |>
+  ggplot(aes(x = BlueTarp, fill = BlueTarp)) +
+  geom_bar() +
+  scale_fill_manual(values = c('Blue Tarp' = 'skyblue', 'Non-Tarp' = 'darkred'))
+  
+```
+
+Boxplots for binary against colors
+
+```{r}
+#| fig.width: 9
+#| fig.height: 8
+#| fig.align: center
+#| out.width: 75%
+library(patchwork)
+
+b1 <- ggplot(train, aes(x = BlueTarp, y = Red)) +
+  geom_boxplot()
+b2 <- ggplot(train, aes(x = BlueTarp, y = Green)) +
+  geom_boxplot()
+b3 <- ggplot(train, aes(x = BlueTarp, y = Blue)) +
+  geom_boxplot()
+b1+b2+b3
+```
+
+Histograms of color variables
+
+```{r}
+#| fig.width: 7
+#| fig.height: 3
+
+g1 <-ggplot(train, aes(Red)) +
+  geom_histogram(fill='darkred')
+g2 <- ggplot(train, aes(Green)) +
+  geom_histogram(fill='lightgreen')
+g3 <- ggplot(train, aes(Blue)) +
+  geom_histogram(fill='skyblue')
+g1+g2+g3
+```
+
+# Holdout Data
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(patchwork)
+```
+
+
+## Hold-Out Data: Unzip the file
+```{r}
+#Create a folder
+unzip("HoldOutData.zip", exdir = "HoldOut")
+
+#Check files
+list.files("HoldOut")
+```
+
+## Parse single ENVI ROI file
+```{r}
+parse_envi_roi <- function(filepath, label) {
+  read_table(
+    filepath,
+    comment    = ";",
+    col_names  = c("ID", "X", "Y", "Map_X", "Map_Y",
+                   "Lat", "Lon", "Red", "Green", "Blue"),
+    col_types  = cols(.default = col_double()),
+    show_col_types = FALSE
+  ) |>
+    select(Red, Green, Blue) |>
+    mutate(
+      BlueTarp = factor(label, levels = c(0, 1),
+                        labels = c("Non-Tarp", "Blue Tarp"))
+    )
+}
+
+
+```
+
+## Load all files and combine into one df
+```{r}
+files <- tribble(
+  ~path,                                      ~label,
+  "HoldOut/orthovnir057_ROI_NON_Blue_Tarps.txt",       0,
+  "HoldOut/orthovnir067_ROI_Blue_Tarps.txt",           1,
+  "HoldOut/orthovnir067_ROI_NOT_Blue_Tarps.txt",       0,
+  "HoldOut/orthovnir069_ROI_Blue_Tarps.txt",           1,
+  "HoldOut/orthovnir069_ROI_NOT_Blue_Tarps.txt",       0,
+  "HoldOut/orthovnir078_ROI_Blue_Tarps.txt",           1,
+  "HoldOut/orthovnir078_ROI_NON_Blue_Tarps.txt",       0
+)
+ 
+holdout <- pmap_dfr(files, ~ parse_envi_roi(..1, ..2))
+cat("Total rows:", scales::comma(nrow(holdout)), "\n\n")
+```
+
+## Data quality checks
+```{r}
+cat("Dimensions \n")
+glimpse(holdout)
+ 
+cat("\n Missing values \n")
+print(colSums(is.na(holdout)))
+ 
+cat("\n Value ranges (should be 0–255) \n")
+holdout |>
+  select(Red, Green, Blue) |>
+  summary() |>
+  print()
+ 
+cat("\n Duplicate rows \n")
+n_dupes <- sum(duplicated(holdout |> select(Red, Green, Blue, BlueTarp)))
+cat("Duplicates:", scales::comma(n_dupes), "\n")
+ 
+cat("\n Class distribution \n")
+class_counts <- holdout |> count(BlueTarp)
+print(class_counts)
+ 
+imbalance_ratio <- class_counts$n[class_counts$BlueTarp == "Non-Tarp"] /
+                   class_counts$n[class_counts$BlueTarp == "Blue Tarp"]
+cat("Imbalance ratio:", round(imbalance_ratio, 0), ":1 (Non-Tarp : Blue Tarp)\n")
+```
+
+## Exploratory Data Analysis
+
+```{r}
+holdout |>
+  ggplot(aes(x = BlueTarp, fill = BlueTarp)) +
+  labs(title = "Tarp Distribution",
+       y = "Pixel Count") +
+  geom_bar() +
+  scale_fill_manual(values = c("Non-Tarp" = "grey", "Blue Tarp" = "blue"))
+```
+
+
+```{r}
+df <- holdout |>
+  pivot_longer(cols = c(Red, Green, Blue),
+               names_to  = "Channel",
+               values_to = "Intensity") |>
+  mutate(Channel = factor(Channel, levels = c("Red", "Green", "Blue")))
+glimpse(df)
+
+ggplot(df, aes(x = BlueTarp, y = Intensity, fill = BlueTarp)) +
+  geom_boxplot() +
+  facet_wrap(~Channel, ncol = 3) +
+  scale_fill_manual(values = c("Non-Tarp" = "grey", "Blue Tarp" = "blue")) +
+  labs(title = "Channel Intensity by Class",
+       y = "Pixel Intensity (0–255)")
+```
+
+
+
+Logistic Regression:
+```{r}
+formula <- BlueTarp ~ Red + Green + Blue
+
+# factor BlueTarp for both datasets
+train <- train |>
+  mutate(BlueTarp = factor(BlueTarp))
+holdout <- holdout |>
+  mutate(BlueTarp = factor(BlueTarp))
+
+# make positive class for holdout set Blue Tarp to match training set
+holdout$BlueTarp <- factor(holdout$BlueTarp, levels = levels(train$BlueTarp))
+
+# create logistic regression model, fitting on the training data
+logreg_model <- logistic_reg(mode = "classification", engine = "glm") |>
+  fit(formula, train)
+```
+
+
+10-fold Cross-Validation:
+```{r}
+set.seed(123)
+
+custom_metrics <- metric_set(accuracy, precision, sens, f_meas, roc_auc)
+
+# fit model using 10-fold cross-validation
+rec <- recipe(formula, data = train) |>
+  step_normalize(all_numeric_predictors())
+
+logreg_spec <- logistic_reg(mode = "classification", engine = "glm")
+
+logreg_wf <- workflow() |>
+  add_recipe(rec) |>
+  add_model(logreg_spec)
+
+resamples <- vfold_cv(train, v = 10, strata = BlueTarp)
+cv_control <- control_resamples(save_pred = TRUE)
+
+logreg_cv <- fit_resamples(logreg_wf, resamples,
+  metrics = custom_metrics,
+  control = cv_control)
+
+# report metrics of the model
+collect_metrics(logreg_cv)
+```
+
+```{r}
+# ROC-AUC curve for 10-fold cross-validation
+collect_predictions(logreg_cv) |>
+  roc_curve(truth = BlueTarp, `.pred_Blue Tarp`, event_level = "first") |>
+  autoplot()
+```
+
+```{r}
+# fit model on full training set and estimate performance metrics on test set
+logreg_fit <- logreg_wf |> 
+  fit(train)
+
+augment(logreg_fit, new_data = holdout) |>
+  custom_metrics(truth = BlueTarp, estimate = .pred_class, `.pred_Blue Tarp`, event_level = "first")|>
+  mutate(data = "Holdout")
+```
+
+```{r}
+preds_logreg <- predict(logreg_fit, new_data = holdout)
+
+prob_preds_logreg <- predict(logreg_fit, new_data = holdout, type = "prob")
+
+results_logreg <- bind_cols(holdout, preds_logreg, prob_preds_logreg)
+
+cm_logreg <- conf_mat(results_logreg, truth = BlueTarp, estimate = .pred_class)
+
+acc_logreg <- accuracy(
+  results_logreg,
+  truth = BlueTarp,
+  estimate = .pred_class,
+)
+
+prec_logreg <- precision(
+  results_logreg,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  event_level = "first"
+)
+
+recall_logreg <- recall(
+  results_logreg,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  event_level = "first"
+)
+
+f1_logreg <- f_meas(
+  results_logreg,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  event_level = "first"
+)
+
+roc_auc_logreg <- roc_auc(
+  results_logreg,
+  truth = BlueTarp,
+  `.pred_Blue Tarp`,
+  event_level = "first"
+)
+
+metrics_df <- tibble(
+  model = character(),
+  accuracy = numeric(),
+  precision = numeric(),
+  recall = numeric(),
+  f1_score = numeric(),
+  roc_auc = numeric(),
+  conf_matrix = list()
+)
+
+metrics_df <- metrics_df |>
+  add_row(
+    model = "Logistic Regression",
+    accuracy = acc_logreg$.estimate,
+    precision = prec_logreg$.estimate,
+    recall = recall_logreg$.estimate,
+    f1_score = f1_logreg$.estimate,
+    roc_auc = roc_auc_logreg$.estimate,
+    conf_matrix = list(cm_logreg)
+  )
+
+metrics_df
+```
+
+Principle Components:
+```{r}
+# tune to find best number of components
+logreg_tune_rec <- recipe(formula, data = train) |>
+  step_normalize(all_numeric_predictors()) |>
+  step_pca(all_numeric_predictors(), num_comp = tune())
+
+logreg_tune_wf <- workflow() |>
+  add_recipe(logreg_tune_rec) |>
+  add_model(logreg_spec)
+
+tune_results <- tune_grid(logreg_tune_wf,
+  resamples = resamples, grid = grid_regular(num_comp(range = c(1,3)), levels = 3))
+
+# plot tuning results
+pca_plot <- autoplot(tune_results)
+pca_plot
+
+# select best parameters using roc-auc
+best_parameters <- select_best(tune_results, metric = "roc_auc")
+
+show_best(tune_results, n=1)
+
+best_logreg_workflow <- logreg_tune_wf |>
+  finalize_workflow(best_parameters) |>
+  fit(train)
+
+# compute metrics
+augment(best_logreg_workflow, new_data = holdout) |>
+  custom_metrics(truth = BlueTarp, estimate = .pred_class, `.pred_Blue Tarp`, event_level = "first")|>
+  mutate(data = "Holdout")
+```
+
+```{r}
+# repeat above for PLS
+
+# tune to find best number of components
+logreg_tune_rec <- recipe(formula, data = train) |>
+  step_normalize(all_numeric_predictors()) |>
+  step_pls(all_numeric_predictors(), outcome = 'BlueTarp', num_comp = tune())
+
+logreg_tune_wf <- workflow() |>
+  add_recipe(logreg_tune_rec) |>
+  add_model(logreg_spec)
+
+tune_results <- tune_grid(logreg_tune_wf,
+  resamples = resamples, grid = grid_regular(num_comp(range = c(1,3)), levels = 3))
+
+# plot tuning results
+pls_plot <- autoplot(tune_results)
+pls_plot
+
+# select best parameters using roc-auc
+best_parameters <- select_best(tune_results, metric = "roc_auc")
+
+show_best(tune_results, n=1)
+
+best_logreg_workflow <- logreg_tune_wf |>
+  finalize_workflow(best_parameters) |>
+  fit(train)
+
+# compute metrics
+augment(best_logreg_workflow, new_data = holdout) |>
+  custom_metrics(truth = BlueTarp, estimate = .pred_class, `.pred_Blue Tarp`, event_level = "first")|>
+  mutate(data = "Holdout")
+```
+
+```{r}
+pca_plot + pls_plot
+```
+
+L1/L2 Regularization:
+```{r}
+logreg_reg_spec <- logistic_reg(engine = "glmnet", mode = "classification",
+  penalty = tune(), mixture = tune())
+
+linreg_reg_wf <- workflow() |>
+  add_recipe(rec) |>
+  add_model(logreg_reg_spec)
+
+parameters <- extract_parameter_set_dials(linreg_reg_wf)
+
+model_bayes <- tune_bayes(linreg_reg_wf, resamples = resamples,
+  param_info = parameters, iter = 25)
+
+autoplot(model_bayes)
+```
+
+```{r}
+show_best(model_bayes, metric = "roc_auc", n=1)
+
+logreg_best_parameters <- select_best(model_bayes, metric = "roc_auc") |>
+  select(-.config)
+
+logreg_best_workflow <- linreg_reg_wf |>
+  finalize_workflow(logreg_best_parameters) |>
+  fit(train)
+```
+
+```{r}
+preds_logreg_best <- predict(logreg_best_workflow, new_data = holdout)
+
+prob_preds_logreg_best <- predict(logreg_best_workflow, new_data = holdout, type = "prob")
+
+results_logreg_best <- bind_cols(holdout, preds_logreg_best, prob_preds_logreg_best)
+
+cm_logreg_best <- conf_mat(results_logreg_best, truth = BlueTarp, estimate = .pred_class)
+
+acc_logreg_best <- accuracy(
+  results_logreg_best,
+  truth = BlueTarp,
+  estimate = .pred_class,
+)
+
+prec_logreg_best <- precision(
+  results_logreg_best,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  event_level = "first"
+)
+
+recall_logreg_best <- recall(
+  results_logreg_best,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  event_level = "first"
+)
+
+f1_logreg_best <- f_meas(
+  results_logreg_best,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  event_level = "first"
+)
+
+roc_auc_logreg_best <- roc_auc(
+  results_logreg_best,
+  truth = BlueTarp,
+  `.pred_Blue Tarp`,
+  event_level = "first"
+)
+
+metrics_df <- metrics_df |>
+  add_row(
+    model = "Logistic Regression Regularization",
+    accuracy = acc_logreg_best$.estimate,
+    precision = prec_logreg_best$.estimate,
+    recall = recall_logreg_best$.estimate,
+    f1_score = f1_logreg_best$.estimate,
+    roc_auc = roc_auc_logreg_best$.estimate,
+    conf_matrix = list(cm_logreg_best)
+  )
+
+metrics_df
+```
+
+
+LDA:
+```{r}
+library(discrim)
+
+# Omit Class due to inherent collinearity with BlueTarp
+lda_model <- discrim_linear() |>
+  set_engine("MASS") |>
+  set_mode("classification")
+
+lda_wf <- workflow() |>
+  add_recipe(rec) |>
+  add_model(lda_model)
+
+cv_results_lda <- fit_resamples(
+  lda_wf,
+  resamples = resamples,
+  control = control_resamples(save_pred = TRUE)
+)
+
+lda_fit <- fit(lda_wf, data = train)
+
+lda_engine <- extract_fit_engine(lda_fit)
+```
+
+
+```{r}
+preds_lda <- predict(lda_fit, new_data = holdout)
+
+prob_preds_lda <- predict(lda_fit, new_data = holdout, type = "prob")
+
+results_lda <- bind_cols(holdout, preds_lda, prob_preds_lda)
+
+cm_lda <- conf_mat(results_lda, truth = BlueTarp, estimate = .pred_class)
+
+acc_lda <- accuracy(
+  results_lda,
+  truth = BlueTarp,
+  estimate = .pred_class,
+)
+
+prec_lda <- precision(
+  results_lda,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  event_level = "first"
+)
+
+recall_lda <- recall(
+  results_lda,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  event_level = "first"
+)
+
+f1_lda <- f_meas(
+  results_lda,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  event_level = "first"
+)
+
+roc_auc_lda <- roc_auc(
+  results_lda,
+  truth = BlueTarp,
+  `.pred_Blue Tarp`,
+  event_level = "first"
+)
+
+metrics_df <- metrics_df |>
+  add_row(
+    model = "LDA",
+    accuracy = acc_lda$.estimate,
+    precision = prec_lda$.estimate,
+    recall = recall_lda$.estimate,
+    f1_score = f1_lda$.estimate,
+    roc_auc = roc_auc_lda$.estimate,
+    conf_matrix = list(cm_lda)
+  )
+
+metrics_df
+```
+
+QDA: 
+```{r}
+# Omit Class due to inherent collinearity with BlueTarp
+qda_model <- discrim_quad() |>
+  set_engine("MASS")
+
+qda_wf <- workflow() |>
+  add_recipe(rec) |>
+  add_model(qda_model)
+
+cv_results_qda <- fit_resamples(
+  qda_wf,
+  resamples = resamples,
+  control = control_resamples(save_pred = TRUE)
+)
+
+qda_fit <- fit(qda_wf, data = train)
+
+qda_engine <- extract_fit_engine(qda_fit)
+```
+
+```{r}
+preds_qda <- predict(qda_fit, new_data = holdout)
+
+prob_preds_qda <- predict(qda_fit, new_data = holdout, type = "prob")
+
+results_qda <- bind_cols(holdout, preds_qda, prob_preds_qda)
+
+cm_qda <- conf_mat(results_qda, truth = BlueTarp, estimate = .pred_class)
+
+acc_qda <- accuracy(
+  results_qda,
+  truth = BlueTarp,
+  estimate = .pred_class,
+)
+
+prec_qda <- precision(
+  results_qda,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  event_level = "first"
+)
+
+recall_qda <- recall(
+  results_qda,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  event_level = "first"
+)
+
+f1_qda <- f_meas(
+  results_qda,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  event_level = "first"
+)
+
+roc_auc_qda <- roc_auc(
+  results_qda,
+  truth = BlueTarp,
+  `.pred_Blue Tarp`,
+  event_level = "first"
+)
+
+
+metrics_df <- metrics_df |>
+  add_row(
+    model = "QDA",
+    accuracy = acc_qda$.estimate,
+    precision = prec_qda$.estimate,
+    recall = recall_qda$.estimate,
+    f1_score = f1_qda$.estimate,
+    roc_auc = roc_auc_qda$.estimate,
+    conf_matrix = list(cm_qda)
+  )
+
+metrics_df
+```
+
+
+KNN:
+```{r}
+#install.packages("kknn")
+library(kknn)
+```
+
+```{r}
+cores <- max(1, parallel::detectCores() - 1)
+
+cl <- parallel::makePSOCKcluster(cores)
+
+doParallel::registerDoParallel(cl)
+```
+
+```{r}
+# make factor levels consistent
+set.seed(100)
+
+# Create KNN model
+knn_spec <- nearest_neighbor(
+  engine = "kknn",
+  mode = "classification",
+  neighbors = tune()
+)
+
+# Workflow
+knn_wf <- workflow() |>
+  add_recipe(rec) |>
+  add_model(knn_spec)
+
+# Tuning range
+knn_grid <- tibble(neighbors = 2:40)
+
+# Tune K 
+knn_results <- tune_grid(
+  knn_wf,
+  resamples = resamples,
+  grid = knn_grid,
+  metrics = custom_metrics,
+  control = control_grid(save_pred = TRUE)
+)
+
+# Plot tuning results
+#autoplot(knn_results) +
+ # theme_bw() +
+  #theme(
+   # text = element_text(size = 13)
+  #)
+
+# Choose best K
+show_best(knn_results, metric = "accuracy", n = 5)
+show_best(knn_results, metric = "precision", n = 5)
+show_best(knn_results, metric = "sens", n = 5)
+show_best(knn_results, metric = "f_meas", n = 5)
+show_best(knn_results, metric = "roc_auc", n = 5)
+
+best_knn <- select_best(knn_results, metric = "roc_auc")
+best_knn
+```
+
+```{r}
+# selecting best model and fitting final model
+final_knn_wf <- finalize_workflow(knn_wf, best_knn)
+
+# Fit final KNN model
+final_knn <- fit(final_knn_wf, data = train)
+```
+
+```{r}
+# Predict on holdout data
+knn_holdout_pred <- predict(final_knn, new_data = holdout, type = "class") |>
+  bind_cols(predict(final_knn, new_data = holdout, type = "prob")) |>
+  bind_cols(holdout |> select(BlueTarp)) |>
+  mutate(
+    .pred_class = factor(.pred_class, levels = levels(knn_holdout_pred$BlueTarp))
+  )
+
+names(knn_holdout_pred)
+
+# Accuracy
+acc_knn <- accuracy(
+  knn_holdout_pred,
+  truth = BlueTarp,
+  estimate = .pred_class
+)
+
+# Precision
+prec_knn <- precision(
+  knn_holdout_pred,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  event_level = "first"
+)
+
+# Recall / sensitivity
+sens_knn <- recall(
+  knn_holdout_pred,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  event_level = "first"
+)
+
+# F1 score
+f1_knn <- f_meas(
+  knn_holdout_pred,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  event_level = "first"
+)
+
+# ROC AUC — use exact probability-column name with backticks
+auc_knn <- roc_auc(
+  knn_holdout_pred,
+  truth = BlueTarp,
+  `.pred_Blue Tarp`,
+  event_level = "first"
+)
+
+# Confusion matrix
+cm_knn <- conf_mat(
+  knn_holdout_pred,
+  truth = BlueTarp,
+  estimate = .pred_class
+)
+```
+
+
+```{r}
+metrics_df <- metrics_df |>
+  add_row(
+    model = "KNN",
+    accuracy = acc_knn$.estimate,
+    precision = prec_knn$.estimate,
+    recall = sens_knn$.estimate,
+    f1_score = f1_knn$.estimate,
+    roc_auc = auc_knn$.estimate,
+    conf_matrix = list(cm_knn)
+  )
+
+metrics_df
+```
+
+```{r}
+parallel::stopCluster(cl)
+```
+
+
+Random Forests:
+```{r}
+# define model
+rf_spec <- rand_forest(mode = "classification", trees = 1000, min_n = tune(), 
+  mtry = tune()) |>
+    set_engine("ranger", importance = "impurity")
+
+# create workflow
+rf_wf <- workflow() |>
+  add_recipe(rec) |>
+  add_model(rf_spec)
+
+# tuning
+rf_grid <- grid_regular(mtry(range = c(1,3)),
+  min_n(range = c(2, 30)),
+  levels = 5)
+
+tuned_rf <- tune_grid(rf_wf, resamples = resamples,
+  grid = rf_grid, metrics = custom_metrics)
+```
+
+```{r}
+autoplot(tuned_rf)
+```
+Performance is relatively stable for each metric across min_n
+
+```{r}
+# selecting best model and fitting final model
+
+best_rf <- select_best(tuned_rf, metric = "roc_auc")
+final_rf <- finalize_workflow(rf_wf, best_rf)
+
+rf_fit <- fit(final_rf, data = train)
+```
+
+```{r}
+preds_rf <- predict(rf_fit, new_data = holdout)
+
+prob_preds_rf <- predict(rf_fit, new_data = holdout, type = "prob")
+
+results_rf <- bind_cols(holdout, preds_rf, prob_preds_rf)
+
+cm_rf <- conf_mat(results_rf, truth = BlueTarp, estimate = .pred_class)
+
+acc_rf <- accuracy(
+  results_rf,
+  truth = BlueTarp,
+  estimate = .pred_class,
+)
+
+prec_rf <- precision(
+  results_rf,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  event_level = "first"
+)
+
+recall_rf <- recall(
+  results_rf,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  event_level = "first"
+)
+
+f1_rf <- f_meas(
+  results_rf,
+  truth = BlueTarp,
+  estimate = .pred_class,
+  event_level = "first"
+)
+
+metrics_df <- metrics_df |>
+  add_row(
+    model = "Random Forests",
+    accuracy = acc_rf$.estimate,
+    precision = prec_rf$.estimate,
+    recall = recall_rf$.estimate,
+    f1_score = f1_rf$.estimate,
+    conf_matrix = list(cm_rf)
+  )
+
+metrics_df
+```
+
