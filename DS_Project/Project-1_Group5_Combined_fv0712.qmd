@@ -673,11 +673,11 @@ knn_results <- tune_grid(
 )
 
 # Plot tuning results
-#autoplot(knn_results) +
- # theme_bw() +
-  #theme(
-   # text = element_text(size = 13)
-  #)
+autoplot(knn_results) +
+  theme_bw()+
+  theme(
+    text = element_text(size = 13)
+  )
 
 # Choose best K
 show_best(knn_results, metric = "accuracy", n = 5)
