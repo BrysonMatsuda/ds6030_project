@@ -492,7 +492,6 @@ lda_fit <- fit(lda_wf, data = train)
 lda_engine <- extract_fit_engine(lda_fit)
 ```
 
-
 ```{r}
 preds_lda <- predict(lda_fit, new_data = holdout)
 
@@ -550,14 +549,73 @@ metrics_df <- metrics_df |>
 metrics_df
 ```
 
+```{r}
+lda_pred <- predict(lda_engine, newdata = train)
+
+lda_df <- data.frame(
+  LD1 = lda_pred$x[,1],
+  BlueTarp = train$BlueTarp
+)
+
+library(ggplot2)
+
+ggplot(lda_df, aes(x = LD1, fill = BlueTarp)) +
+  geom_density(alpha = 0.4) +
+  labs(
+    title = "LDA Discriminant Scores",
+    x = "LD1",
+    y = "Density"
+  )
+```
+
+```{r}
+coef_df <- data.frame(
+  Variable = rownames(lda_engine$scaling),
+  Coefficient = lda_engine$scaling[,1]
+)
+
+ggplot(coef_df,
+       aes(x = reorder(Variable, Coefficient),
+           y = Coefficient)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "LDA Feature Importance",
+    x = "",
+    y = "Coefficient"
+  )
+```
+
+```{r}
+library(GGally)
+
+ggpairs(
+    train,
+    columns = c("Red","Green","Blue"),
+    mapping = aes(color = BlueTarp)
+)
+```
+
+```{r}
+results_lda |>
+    roc_curve(
+        truth = BlueTarp,
+        `.pred_Blue Tarp`,
+        event_level="first"
+    ) |>
+    autoplot()
+```
+
 QDA: 
 ```{r}
+qda_rec <- recipe(formula, data = train)
 # Omit Class due to inherent collinearity with BlueTarp
 qda_model <- discrim_quad() |>
   set_engine("MASS")
 
 qda_wf <- workflow() |>
-  add_recipe(rec) |>
+  add_recipe(qda_rec) |>
   add_model(qda_model)
 
 cv_results_qda <- fit_resamples(
@@ -629,6 +687,171 @@ metrics_df <- metrics_df |>
 metrics_df
 ```
 
+```{r}
+results_qda |>
+    roc_curve(
+        truth = BlueTarp,
+        `.pred_Blue Tarp`,
+        event_level = "first"
+    ) |>
+    autoplot()
+```
+
+```{r}
+results_qda$Correct <-
+    results_qda$BlueTarp ==
+    results_qda$.pred_class
+
+ggplot(results_qda,
+       aes(Red,
+           Blue,
+           color = Correct)) +
+    geom_point(alpha = .5) +
+    theme_minimal() +
+    labs(
+      title = "QDA Classification Errors"
+    )
+```
+
+```{r}
+library(MASS)
+library(plotly)
+library(dplyr)
+
+# Extract LDA coefficients
+lda_coef <- lda_engine$scaling[,1]
+
+# Calculate intercept
+lda_intercept <- -sum(
+  lda_engine$means[1,] * lda_coef
+)
+
+
+# Create Red-Green grid
+plane_grid <- expand.grid(
+  Red = seq(min(train$Red), max(train$Red), length.out = 60),
+  Green = seq(min(train$Green), max(train$Green), length.out = 60)
+)
+
+plane_grid$Blue <- -(
+  lda_intercept +
+    lda_coef["Red"] * plane_grid$Red +
+    lda_coef["Green"] * plane_grid$Green
+) / lda_coef["Blue"]
+
+
+# Keep plane inside observed RGB range
+plane_grid <- plane_grid %>%
+  filter(
+    Blue >= min(train$Blue),
+    Blue <= max(train$Blue)
+  )
+
+
+red_vals <- sort(unique(plane_grid$Red))
+green_vals <- sort(unique(plane_grid$Green))
+
+
+lda_plane_z <- matrix(
+  plane_grid$Blue,
+  nrow = length(red_vals),
+  ncol = length(green_vals)
+)
+
+blue_tarp_points <- train %>%
+  filter(BlueTarp == "Blue Tarp")
+
+
+non_blue_tarp_points <- train %>%
+  filter(BlueTarp != "Blue Tarp")
+
+lda_3d_plot <- plot_ly() %>%
+
+  # Blue tarp pixels
+  add_trace(
+    data = blue_tarp_points,
+    x = ~Red,
+    y = ~Green,
+    z = ~Blue,
+    type = "scatter3d",
+    mode = "markers",
+    marker = list(
+      size = 3,
+      color = "blue",
+      opacity = 0.75
+    ),
+    name = "Blue Tarp",
+    showlegend = TRUE
+  ) %>%
+
+  # Non-blue tarp pixels
+  add_trace(
+    data = non_blue_tarp_points,
+    x = ~Red,
+    y = ~Green,
+    z = ~Blue,
+    type = "scatter3d",
+    mode = "markers",
+    marker = list(
+      size = 3,
+      color = "gray",
+      opacity = 0.5
+    ),
+    name = "Non-Blue Tarp",
+    showlegend = TRUE
+  ) %>%
+
+  # LDA boundary plane
+  add_surface(
+    x = red_vals,
+    y = green_vals,
+    z = lda_plane_z,
+    opacity = 0.55,
+    colorscale = list(
+      c(0,1),
+      c("red","red")
+    ),
+    showscale = FALSE,
+    name = "LDA Decision Boundary",
+    showlegend = TRUE
+  ) %>%
+
+  layout(
+    title = "LDA Decision Boundary in RGB Space",
+    showlegend = TRUE,
+
+    legend = list(
+      title = list(
+        text = "Legend"
+      )
+    ),
+
+    scene = list(
+      xaxis = list(
+        title = "Red Intensity"
+      ),
+      yaxis = list(
+        title = "Green Intensity"
+      ),
+      zaxis = list(
+        title = "Blue Intensity"
+      )
+    )
+  )
+
+
+lda_3d_plot
+```
+
+```{r}
+nrow(lda_boundary)
+```
+
+```{r}
+library(patchwork)
+
+lda_rb_plot
+```
 
 KNN:
 ```{r}
