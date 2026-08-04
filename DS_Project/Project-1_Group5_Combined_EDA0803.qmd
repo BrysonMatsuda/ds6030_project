@@ -921,16 +921,6 @@ lda_3d_plot <- plot_ly() %>%
 lda_3d_plot
 ```
 
-```{r}
-nrow(lda_boundary)
-```
-
-```{r}
-library(patchwork)
-
-lda_rb_plot
-```
-
 KNN:
 ```{r}
 #install.packages("kknn")

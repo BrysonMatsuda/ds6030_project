@@ -410,6 +410,7 @@ logreg_best_workflow <- linreg_reg_wf |>
   fit(train)
 ```
 
+
 ```{r}
 preds_logreg_best <- predict(logreg_best_workflow, new_data = holdout)
 
@@ -467,6 +468,19 @@ metrics_df <- metrics_df |>
 metrics_df
 ```
 
+```{r}
+autoplot(cm_logreg_best, type = "heatmap") +
+  scale_fill_gradient(
+    low = "grey95",
+    high = "grey65"
+  ) +
+  labs(
+    title = "Regularized Logistic Regression Confusion Matrix",
+    x = "Predicted",
+    y = "Actual"
+  ) +
+  theme_minimal()
+```
 
 LDA:
 ```{r}
